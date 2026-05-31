@@ -97,7 +97,13 @@ class SelfPlayConfig:
     search_gain_bump_below: float = 0.55
     sims_ladder: tuple = (600, 900, 1200, 1600)
     gate_winrate: float = 0.55        # promotion threshold
-    gate_games: int = 100
+    gate_games: int = 50              # games per gate (cheaper than 100; still decent SPRT-lite)
+    gate_every_games: int = 4000      # run the gate every N generated games (not steps)
+    sg_games: int = 30                # games per search_gain check
+    sg_every_games: int = 4000        # run search_gain every N generated games
+    state_every_games: int = 2000     # checkpoint full training state (for --resume) every N games
+    base_elo: float = 1611.0          # starting Elo estimate (the distilled net's measured Elo)
+    worker_leaf_batch: int = 32       # leaves per worker MCTS wave (fewer IPC round-trips -> faster)
 
 
 # ---------------------------------------------------------------------------
