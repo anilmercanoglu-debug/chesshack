@@ -1,0 +1,13 @@
+{
+  "shards": [
+    "shard_000000.npz"
+  ],
+  "count": 2984,
+  "label_settings": {
+    "sf_nodes": 100000,
+    "multipv": 4,
+    "tau_cp": 90.0,
+    "topk_mass": 0.92,
+    "stockfish": "/home/casper/chesshack/tools/stockfish"
+  }
+}
