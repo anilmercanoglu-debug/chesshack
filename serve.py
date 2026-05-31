@@ -60,7 +60,8 @@ INDEX_HTML = r"""<!doctype html>
  <h1>&#9823; ChessHack</h1>
  <button id="new">New game</button>
  <label>Play as
-  <select id="color"><option value="white">White</option><option value="black">Black</option></select></label>
+  <select id="color"><option value="random" selected>Random</option><option value="white">White</option><option value="black">Black</option></select></label>
+ <div id="who" style="margin-top:8px;font-weight:bold"></div>
  <label>Bot strength (sims): <span id="simsv">400</span>
   <input id="sims" type="range" min="50" max="1600" step="50" value="400"></label>
  <div id="promo">Promote to:
@@ -71,51 +72,55 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const GLYPH={K:'♚',Q:'♛',R:'♜',B:'♝',N:'♞',P:'♟'};
 const $=id=>document.getElementById(id);
-let st=null, human='white', sel=null, busy=false, pendingPromo=null, lastMove=null;
+let st=null, humanColor='white', sel=null, busy=false, pendingPromo=null, lastMove=null;
 
 function sqName(file,rank){return 'abcdefgh'[file]+(rank+1);}
+function idxOf(name){return (7-(+name[1]-1))*8+'abcdefgh'.indexOf(name[0]);}
 async function api(path,body){
  const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify(body)}:{}); return r.json();
 }
+function movable(name){return !!(st&&st.legal[name])&&!busy&&!st.gameover;}
 function render(){
  const b=$('board'); b.innerHTML='';
- const ranks=human==='white'?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
- const files=human==='white'?[0,1,2,3,4,5,6,7]:[7,6,5,4,3,2,1,0];
+ const ranks=humanColor==='white'?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
+ const files=humanColor==='white'?[0,1,2,3,4,5,6,7]:[7,6,5,4,3,2,1,0];
  const targets=sel&&st.legal[sel]?st.legal[sel]:[];
  for(const rank of ranks)for(const file of files){
    const name=sqName(file,rank), i=(7-rank)*8+file, piece=st.cells[i];
    const d=document.createElement('div');
-   d.className='sq '+((file+rank)%2? 'light':'dark');
-   d.dataset.sq=name;
-   if(piece){const g=document.createElement('span');g.className='p '+(piece[0]);
+   d.className='sq '+((file+rank)%2?'light':'dark'); d.dataset.sq=name;
+   if(piece){const g=document.createElement('span');g.className='p '+piece[0];
      g.textContent=GLYPH[piece[1]];d.appendChild(g);}
    if(name===sel)d.classList.add('sel');
    if(lastMove&&(name===lastMove[0]||name===lastMove[1]))d.classList.add('last');
    if(targets.includes(name))d.classList.add(piece?'tgtcap':'tgt');
    if(st.check&&piece&&piece[1]==='K'&&((piece[0]==='w')===(st.turn==='w')))d.classList.add('chk');
    d.onclick=()=>onClick(name);
+   d.draggable=movable(name);
+   d.ondragstart=e=>{if(!movable(name)){e.preventDefault();return;}sel=name;render();
+     e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';};
+   d.ondragover=e=>e.preventDefault();
+   d.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain')||sel;
+     if(from&&st.legal[from]&&st.legal[from].includes(name))attemptMove(from,name);
+     else{sel=null;render();}};
    b.appendChild(d);
  }
 }
 function setStatus(h){$('status').innerHTML=h;}
-function gameOverMsg(){
- if(!st.gameover)return '';
- const r=st.result; let m='<br><b>Game over: '+r+'</b>';
- return m;
-}
-function needPromo(from,to){
- const i=(7-(+from[1]-1))*8+'abcdefgh'.indexOf(from[0]);
- const p=st.cells[i]; if(!p||p[1]!=='P')return false;
- return to[1]==='8'||to[1]==='1';
+function gameOverMsg(){return st.gameover?('<br><b>Game over: '+st.result+'</b>'):'';}
+function needPromo(from,to){const p=st.cells[idxOf(from)];
+ return !!p&&p[1]==='P'&&(to[1]==='8'||to[1]==='1');}
+function attemptMove(from,to){
+ if(busy||st.gameover)return;
+ if(needPromo(from,to)){pendingPromo=[from,to];$('promo').style.display='block';return;}
+ doMove(from,to,null);
 }
 async function doMove(from,to,promo){
  busy=true; sel=null; setStatus('bot is thinking&hellip;');
- const sims=+$('sims').value;
- const res=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null,sims});
+ const res=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null,sims:+$('sims').value});
  if(res.error){busy=false; st=res.state||st; render(); setStatus('error: '+res.error); return;}
- lastMove=res.bot?[res.bot.from,res.bot.to]:[from,to];
- st=res.state; render();
+ lastMove=res.bot?[res.bot.from,res.bot.to]:[from,to]; st=res.state; render();
  if(res.bot){const s=res.bot.eval>=0?'+':'';
    setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
      res.bot.eval.toFixed(2)+'</span> (bot POV), '+res.bot.sims+' sims'+gameOverMsg());}
@@ -125,12 +130,8 @@ async function doMove(from,to,promo){
 function onClick(name){
  if(busy||!st||st.gameover)return;
  const targets=sel&&st.legal[sel]?st.legal[sel]:[];
- if(sel&&targets.includes(name)){
-   if(needPromo(sel,name)){pendingPromo=[sel,name];$('promo').style.display='block';return;}
-   doMove(sel,name,null); return;
- }
- if(st.legal[name]){sel=name; render();}
- else {sel=null; render();}
+ if(sel&&targets.includes(name)){attemptMove(sel,name);return;}
+ if(st.legal[name]){sel=name;render();} else {sel=null;render();}
 }
 async function botFirst(){
  busy=true; setStatus('bot is thinking&hellip;');
@@ -138,13 +139,17 @@ async function botFirst(){
  lastMove=res.bot?[res.bot.from,res.bot.to]:null; st=res.state; render();
  if(res.bot){const s=res.bot.eval>=0?'+':'';
    setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
-     res.bot.eval.toFixed(2)+'</span>, '+res.bot.sims+' sims');}
+     res.bot.eval.toFixed(2)+'</span>, '+res.bot.sims+' sims'+gameOverMsg());}
  busy=false;
 }
 async function newGame(){
- human=$('color').value; sel=null; lastMove=null; $('promo').style.display='none';
- st=await api('/api/new'); render(); setStatus('your move.');
- if(human==='black')botFirst();
+ const choice=$('color').value;
+ humanColor=choice==='random'?(Math.random()<0.5?'white':'black'):choice;
+ sel=null; lastMove=null; $('promo').style.display='none';
+ st=await api('/api/new'); render();
+ $('who').textContent='You play '+humanColor.toUpperCase()+(choice==='random'?' (random)':'');
+ setStatus(humanColor==='white'?'Your move. Click or drag a piece.':'Bot moves first&hellip;');
+ if(humanColor==='black')botFirst();
 }
 $('new').onclick=newGame;
 $('sims').oninput=e=>$('simsv').textContent=e.target.value;
