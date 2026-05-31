@@ -49,7 +49,10 @@ INDEX_HTML = r"""<!doctype html>
  button,select{font-size:15px;padding:7px 12px;margin:4px 4px 4px 0;background:#4a4844;
    color:#e8e6e3;border:1px solid #5a5854;border-radius:6px;cursor:pointer}
  button:hover{background:#5a5854}
- #status{margin-top:14px;font-size:15px;line-height:1.6;min-height:70px}
+ #status{margin-top:14px;font-size:15px;line-height:1.6;min-height:56px}
+ #moves{margin-top:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;
+   max-height:260px;overflow-y:auto;background:#1f1d1b;padding:8px 10px;border-radius:6px}
+ #moves div{padding:1px 0}#moves div:nth-child(odd){background:#2a2825}
  .eval{font-weight:bold}
  label{display:block;margin-top:10px;font-size:14px;color:#bdbab5}
  input[type=range]{width:100%}
@@ -68,11 +71,12 @@ INDEX_HTML = r"""<!doctype html>
   <button data-p="q">&#9819;</button><button data-p="r">&#9820;</button>
   <button data-p="b">&#9821;</button><button data-p="n">&#9822;</button></div>
  <div id="status">Click a piece to move.</div>
+ <div id="moves"></div>
 </div>
 <script>
 const GLYPH={K:'♚',Q:'♛',R:'♜',B:'♝',N:'♞',P:'♟'};
 const $=id=>document.getElementById(id);
-let st=null, humanColor='white', sel=null, busy=false, pendingPromo=null, lastMove=null;
+let st=null, humanColor='white', sel=null, busy=false, pendingPromo=null, lastMove=null, history=[];
 
 function sqName(file,rank){return 'abcdefgh'[file]+(rank+1);}
 function idxOf(name){return (7-(+name[1]-1))*8+'abcdefgh'.indexOf(name[0]);}
@@ -116,15 +120,27 @@ function attemptMove(from,to){
  if(needPromo(from,to)){pendingPromo=[from,to];$('promo').style.display='block';return;}
  doMove(from,to,null);
 }
+function botMsg(bot){const s=bot.eval>=0?'+':'';
+ return 'bot played <b>'+bot.san+'</b><br><span class="eval">eval '+s+bot.eval.toFixed(2)+
+   '</span> (bot POV), '+bot.sims+' sims'+gameOverMsg();}
+function renderMoves(){
+ let h=''; for(let i=0;i<history.length;i+=2){const n=i/2+1;
+   h+='<div>'+n+'. '+history[i]+(history[i+1]?' '+history[i+1]:'')+'</div>';}
+ const m=$('moves'); m.innerHTML=h; m.scrollTop=m.scrollHeight;
+}
 async function doMove(from,to,promo){
- busy=true; sel=null; setStatus('bot is thinking&hellip;');
- const res=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null,sims:+$('sims').value});
- if(res.error){busy=false; st=res.state||st; render(); setStatus('error: '+res.error); return;}
- lastMove=res.bot?[res.bot.from,res.bot.to]:[from,to]; st=res.state; render();
- if(res.bot){const s=res.bot.eval>=0?'+':'';
-   setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
-     res.bot.eval.toFixed(2)+'</span> (bot POV), '+res.bot.sims+' sims'+gameOverMsg());}
- else setStatus('your move.'+gameOverMsg());
+ busy=true; sel=null;
+ // 1) apply + render MY move immediately (fast server call, no search)
+ const r1=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null});
+ if(r1.error){busy=false; render(); setStatus('error: '+r1.error); return;}
+ history.push(r1.san); lastMove=[from,to]; st=r1.state; render(); renderMoves();
+ if(st.gameover){busy=false; setStatus('move played.'+gameOverMsg()); return;}
+ // 2) now the bot thinks, then render its reply
+ setStatus('bot is thinking&hellip;');
+ const r2=await api('/api/botmove',{fen:st.fen,sims:+$('sims').value});
+ if(r2.bot){history.push(r2.bot.san); lastMove=[r2.bot.from,r2.bot.to];}
+ st=r2.state; render(); renderMoves();
+ setStatus(r2.bot?botMsg(r2.bot):('your move.'+gameOverMsg()));
  busy=false;
 }
 function onClick(name){
@@ -136,17 +152,15 @@ function onClick(name){
 async function botFirst(){
  busy=true; setStatus('bot is thinking&hellip;');
  const res=await api('/api/botmove',{fen:st.fen,sims:+$('sims').value});
- lastMove=res.bot?[res.bot.from,res.bot.to]:null; st=res.state; render();
- if(res.bot){const s=res.bot.eval>=0?'+':'';
-   setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
-     res.bot.eval.toFixed(2)+'</span>, '+res.bot.sims+' sims'+gameOverMsg());}
- busy=false;
+ if(res.bot){history.push(res.bot.san); lastMove=[res.bot.from,res.bot.to];}
+ st=res.state; render(); renderMoves();
+ setStatus(res.bot?botMsg(res.bot):'your move.'); busy=false;
 }
 async function newGame(){
  const choice=$('color').value;
  humanColor=choice==='random'?(Math.random()<0.5?'white':'black'):choice;
- sel=null; lastMove=null; $('promo').style.display='none';
- st=await api('/api/new'); render();
+ sel=null; lastMove=null; history=[]; $('promo').style.display='none';
+ st=await api('/api/new'); render(); renderMoves();
  $('who').textContent='You play '+humanColor.toUpperCase()+(choice==='random'?' (random)':'');
  setStatus(humanColor==='white'?'Your move. Click or drag a piece.':'Bot moves first&hellip;');
  if(humanColor==='black')botFirst();
@@ -225,9 +239,9 @@ class Handler(BaseHTTPRequestHandler):
                                 promotion=chess.Piece.from_symbol(promo).piece_type if promo else None)
                 if mv not in board.legal_moves:
                     self._json({"error": "illegal move", "state": _state(board)}); return
+                san = board.san(mv)
                 board.push(mv)
-                bot = None if board.is_game_over(claim_draw=True) else _bot_move(board, sims)
-                self._json({"bot": bot, "state": _state(board)})
+                self._json({"san": san, "state": _state(board)})
             else:
                 self._send(404, b'{"error":"not found"}')
         except Exception as e:
