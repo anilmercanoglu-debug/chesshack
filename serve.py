@@ -1,11 +1,10 @@
-"""Web UI to play against the bot. Drag-and-drop board in the browser; the server runs the
-net + MCTS and replies with its move.
+"""Web UI to play against the bot. Self-contained: vanilla JS + Unicode pieces (no image/JS
+CDNs that break behind the Colab proxy). All chess legality is server-side (python-chess);
+the browser just renders the board, highlights legal targets on click, and POSTs moves.
 
     python serve.py --ckpt data/nets/distilled.pt --sims 400 --port 8000
 
-Local: open http://localhost:8000.  Colab: run, then
-    from google.colab.output import eval_js; print(eval_js('google.colab.kernel.proxyPort(8000)'))
-and open the printed URL. No extra deps (stdlib http.server + CDN board).
+Local: http://localhost:8000.  Colab: run, then proxyPort(8000) for the URL.
 """
 from __future__ import annotations
 
@@ -25,82 +24,162 @@ BOT = None
 BOT_LOCK = threading.Lock()
 DEFAULT_SIMS = 400
 
-INDEX_HTML = """<!doctype html>
+INDEX_HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>ChessHack — play the bot</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
 <style>
- body{font-family:system-ui,sans-serif;background:#262421;color:#e8e6e3;margin:0;padding:20px;display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
- #board{width:480px}
- .panel{min-width:240px;max-width:320px}
+ body{font-family:system-ui,Arial,sans-serif;background:#262421;color:#e8e6e3;margin:0;
+   padding:18px;display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
+ #board{display:grid;grid-template-columns:repeat(8,60px);grid-template-rows:repeat(8,60px);
+   border:3px solid #111;box-shadow:0 4px 20px #0008}
+ .sq{width:60px;height:60px;display:flex;align-items:center;justify-content:center;
+   font-size:44px;line-height:1;cursor:pointer;position:relative;user-select:none}
+ .light{background:#eeeed2}.dark{background:#769656}
+ .p.w{color:#fbfbfb;text-shadow:0 0 2px #000,0 0 2px #000,0 0 3px #000}
+ .p.b{color:#1a1a1a;text-shadow:0 0 1px #999}
+ .sel{box-shadow:inset 0 0 0 4px #f6f669a0}
+ .last{background:#bbcb44 !important}
+ .tgt::after{content:"";position:absolute;width:22px;height:22px;border-radius:50%;
+   background:#20202055}
+ .tgtcap::after{content:"";position:absolute;width:54px;height:54px;border-radius:50%;
+   box-shadow:inset 0 0 0 5px #20202055}
+ .chk{background:#e06666 !important}
+ .panel{min-width:240px;max-width:340px}
  h1{font-size:20px;margin:0 0 12px}
- button,select{font-size:15px;padding:7px 12px;margin:4px 0;background:#4a4844;color:#e8e6e3;border:1px solid #5a5854;border-radius:6px;cursor:pointer}
+ button,select{font-size:15px;padding:7px 12px;margin:4px 4px 4px 0;background:#4a4844;
+   color:#e8e6e3;border:1px solid #5a5854;border-radius:6px;cursor:pointer}
  button:hover{background:#5a5854}
- #status{margin-top:14px;font-size:15px;line-height:1.5;min-height:80px}
+ #status{margin-top:14px;font-size:15px;line-height:1.6;min-height:70px}
  .eval{font-weight:bold}
  label{display:block;margin-top:10px;font-size:14px;color:#bdbab5}
  input[type=range]{width:100%}
+ #promo{display:none;margin-top:10px}#promo button{font-size:30px;padding:2px 10px}
 </style></head><body>
 <div id="board"></div>
 <div class="panel">
- <h1>♟ ChessHack</h1>
+ <h1>&#9823; ChessHack</h1>
  <button id="new">New game</button>
  <label>Play as
   <select id="color"><option value="white">White</option><option value="black">Black</option></select></label>
  <label>Bot strength (sims): <span id="simsv">400</span>
   <input id="sims" type="range" min="50" max="1600" step="50" value="400"></label>
- <div id="status">Drag a piece to move.</div>
+ <div id="promo">Promote to:
+  <button data-p="q">&#9819;</button><button data-p="r">&#9820;</button>
+  <button data-p="b">&#9821;</button><button data-p="n">&#9822;</button></div>
+ <div id="status">Click a piece to move.</div>
 </div>
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script>
-const PIECES='https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/img/chesspieces/wikipedia/{piece}.png';
-let game=new Chess(), board, human='white', thinking=false;
-const $st=document.getElementById('status');
-function setStatus(h){$st.innerHTML=h;}
-function over(){
- if(!game.game_over())return false;
- let m='Game over — ';
- if(game.in_checkmate())m+=(game.turn()==='w'?'Black':'White')+' wins by checkmate';
- else if(game.in_draw())m+='draw';
- else m+='over';
- setStatus(m); return true;
+const GLYPH={K:'♚',Q:'♛',R:'♜',B:'♝',N:'♞',P:'♟'};
+const $=id=>document.getElementById(id);
+let st=null, human='white', sel=null, busy=false, pendingPromo=null, lastMove=null;
+
+function sqName(file,rank){return 'abcdefgh'[file]+(rank+1);}
+async function api(path,body){
+ const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(body)}:{}); return r.json();
 }
-async function botMove(){
- thinking=true; setStatus('bot is thinking…');
- const sims=+document.getElementById('sims').value;
- const r=await fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({fen:game.fen(),sims})});
- const d=await r.json(); thinking=false;
- if(d.error){setStatus('error: '+d.error);return;}
- game.move({from:d.from,to:d.to,promotion:d.promotion||undefined});
- board.position(game.fen());
- const sign=(d.eval>=0?'+':'');
- setStatus('bot played <b>'+d.san+'</b><br><span class="eval">eval '+sign+d.eval.toFixed(2)+
-   '</span> (its own POV), '+d.sims+' sims');
- over();
+function render(){
+ const b=$('board'); b.innerHTML='';
+ const ranks=human==='white'?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
+ const files=human==='white'?[0,1,2,3,4,5,6,7]:[7,6,5,4,3,2,1,0];
+ const targets=sel&&st.legal[sel]?st.legal[sel]:[];
+ for(const rank of ranks)for(const file of files){
+   const name=sqName(file,rank), i=(7-rank)*8+file, piece=st.cells[i];
+   const d=document.createElement('div');
+   d.className='sq '+((file+rank)%2? 'light':'dark');
+   d.dataset.sq=name;
+   if(piece){const g=document.createElement('span');g.className='p '+(piece[0]);
+     g.textContent=GLYPH[piece[1]];d.appendChild(g);}
+   if(name===sel)d.classList.add('sel');
+   if(lastMove&&(name===lastMove[0]||name===lastMove[1]))d.classList.add('last');
+   if(targets.includes(name))d.classList.add(piece?'tgtcap':'tgt');
+   if(st.check&&piece&&piece[1]==='K'&&((piece[0]==='w')===(st.turn==='w')))d.classList.add('chk');
+   d.onclick=()=>onClick(name);
+   b.appendChild(d);
+ }
 }
-function onDrop(src,tgt){
- if(thinking)return 'snapback';
- const mv=game.move({from:src,to:tgt,promotion:'q'});
- if(mv===null)return 'snapback';
- board.position(game.fen());
- if(over())return;
- setTimeout(botMove,150);
+function setStatus(h){$('status').innerHTML=h;}
+function gameOverMsg(){
+ if(!st.gameover)return '';
+ const r=st.result; let m='<br><b>Game over: '+r+'</b>';
+ return m;
 }
-function newGame(){
- game.reset(); human=document.getElementById('color').value;
- board=Chessboard('board',{draggable:true,position:'start',pieceTheme:PIECES,
-   orientation:human,onDrop:onDrop});
- board.position(game.fen());
- setStatus('your move.');
- if(human==='black')setTimeout(botMove,300);
+function needPromo(from,to){
+ const i=(7-(+from[1]-1))*8+'abcdefgh'.indexOf(from[0]);
+ const p=st.cells[i]; if(!p||p[1]!=='P')return false;
+ return to[1]==='8'||to[1]==='1';
 }
-document.getElementById('new').onclick=newGame;
-document.getElementById('sims').oninput=e=>document.getElementById('simsv').textContent=e.target.value;
+async function doMove(from,to,promo){
+ busy=true; sel=null; setStatus('bot is thinking&hellip;');
+ const sims=+$('sims').value;
+ const res=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null,sims});
+ if(res.error){busy=false; st=res.state||st; render(); setStatus('error: '+res.error); return;}
+ lastMove=res.bot?[res.bot.from,res.bot.to]:[from,to];
+ st=res.state; render();
+ if(res.bot){const s=res.bot.eval>=0?'+':'';
+   setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
+     res.bot.eval.toFixed(2)+'</span> (bot POV), '+res.bot.sims+' sims'+gameOverMsg());}
+ else setStatus('your move.'+gameOverMsg());
+ busy=false;
+}
+function onClick(name){
+ if(busy||!st||st.gameover)return;
+ const targets=sel&&st.legal[sel]?st.legal[sel]:[];
+ if(sel&&targets.includes(name)){
+   if(needPromo(sel,name)){pendingPromo=[sel,name];$('promo').style.display='block';return;}
+   doMove(sel,name,null); return;
+ }
+ if(st.legal[name]){sel=name; render();}
+ else {sel=null; render();}
+}
+async function botFirst(){
+ busy=true; setStatus('bot is thinking&hellip;');
+ const res=await api('/api/botmove',{fen:st.fen,sims:+$('sims').value});
+ lastMove=res.bot?[res.bot.from,res.bot.to]:null; st=res.state; render();
+ if(res.bot){const s=res.bot.eval>=0?'+':'';
+   setStatus('bot played <b>'+res.bot.san+'</b><br><span class="eval">eval '+s+
+     res.bot.eval.toFixed(2)+'</span>, '+res.bot.sims+' sims');}
+ busy=false;
+}
+async function newGame(){
+ human=$('color').value; sel=null; lastMove=null; $('promo').style.display='none';
+ st=await api('/api/new'); render(); setStatus('your move.');
+ if(human==='black')botFirst();
+}
+$('new').onclick=newGame;
+$('sims').oninput=e=>$('simsv').textContent=e.target.value;
+document.querySelectorAll('#promo button').forEach(btn=>btn.onclick=()=>{
+ $('promo').style.display='none'; const [f,t]=pendingPromo; doMove(f,t,btn.dataset.p);});
 newGame();
 </script></body></html>"""
+
+
+def _state(board: chess.Board) -> dict:
+    cells = []
+    for rank in range(7, -1, -1):
+        for file in range(8):
+            p = board.piece_at(chess.square(file, rank))
+            cells.append((("w" if p.color else "b") + chess.piece_symbol(p.piece_type).upper())
+                         if p else None)
+    legal: dict = {}
+    for m in board.legal_moves:
+        legal.setdefault(chess.square_name(m.from_square), set()).add(chess.square_name(m.to_square))
+    legal = {k: sorted(v) for k, v in legal.items()}
+    over = board.is_game_over(claim_draw=True)
+    return {"fen": board.fen(), "cells": cells, "turn": "w" if board.turn else "b",
+            "legal": legal, "gameover": over,
+            "result": board.result(claim_draw=True) if over else None,
+            "check": board.is_check()}
+
+
+def _bot_move(board: chess.Board, sims: int) -> dict:
+    with BOT_LOCK:
+        mv, root = BOT.choose(board, temperature=0.0, sims=sims)
+    san = board.san(mv)
+    info = {"from": chess.square_name(mv.from_square), "to": chess.square_name(mv.to_square),
+            "san": san, "eval": root_value(root), "sims": int(root.N.sum())}
+    board.push(mv)
+    return info
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -114,33 +193,40 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, obj):
+        self._send(200, json.dumps(obj).encode())
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
+        elif self.path == "/api/new":
+            self._json(_state(chess.Board()))
         else:
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
-        if self.path != "/api/move":
-            self._send(404, b'{"error":"not found"}'); return
         try:
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n) or b"{}")
-            board = chess.Board(req["fen"])
             sims = int(req.get("sims", DEFAULT_SIMS))
-            if board.is_game_over(claim_draw=True):
-                self._send(200, json.dumps({"error": "game over"}).encode()); return
-            with BOT_LOCK:
-                mv, root = BOT.choose(board, temperature=0.0, sims=sims)
-            ev = root_value(root)
-            san = board.san(mv)
-            promo = chess.piece_symbol(mv.promotion) if mv.promotion else None
-            out = {"from": chess.square_name(mv.from_square),
-                   "to": chess.square_name(mv.to_square), "promotion": promo,
-                   "san": san, "eval": ev, "sims": int(root.N.sum())}
-            self._send(200, json.dumps(out).encode())
+            if self.path == "/api/botmove":
+                board = chess.Board(req["fen"])
+                bot = None if board.is_game_over(claim_draw=True) else _bot_move(board, sims)
+                self._json({"bot": bot, "state": _state(board)})
+            elif self.path == "/api/move":
+                board = chess.Board(req["fen"])
+                promo = req.get("promotion")
+                mv = chess.Move(chess.parse_square(req["from"]), chess.parse_square(req["to"]),
+                                promotion=chess.Piece.from_symbol(promo).piece_type if promo else None)
+                if mv not in board.legal_moves:
+                    self._json({"error": "illegal move", "state": _state(board)}); return
+                board.push(mv)
+                bot = None if board.is_game_over(claim_draw=True) else _bot_move(board, sims)
+                self._json({"bot": bot, "state": _state(board)})
+            else:
+                self._send(404, b'{"error":"not found"}')
         except Exception as e:
-            self._send(200, json.dumps({"error": str(e)}).encode())
+            self._json({"error": str(e)})
 
 
 def main():
@@ -158,7 +244,7 @@ def main():
     BOT = Player(net, dev, sims=args.sims, leaf_batch=args.leaf_batch)
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     print(f"[serve] {args.ckpt} @ {args.sims} sims on {dev}")
-    print(f"[serve] open http://localhost:{args.port}  (Colab: use proxyPort({args.port}))")
+    print(f"[serve] open http://localhost:{args.port}  (Colab: proxyPort({args.port}))")
     srv.serve_forever()
 
 
