@@ -114,7 +114,8 @@ function render(){
    d.draggable=movable(name);
    d.ondragstart=e=>{if(!movable(name)){e.preventDefault();return;}
      e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';
-     sel=name; highlightTargets();};   // NB: no full render() here — it would destroy the drag source
+     sel=name; highlightTargets();   // NB: no full render() here — it would destroy the drag source
+     const sp=d.querySelector('span'); if(sp)setTimeout(()=>{sp.style.visibility='hidden';},0);};
    d.ondragover=e=>e.preventDefault();
    d.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain')||sel;
      if(from&&st.legal[from]&&st.legal[from].includes(name))attemptMove(from,name);
