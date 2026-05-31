@@ -37,6 +37,7 @@ INDEX_HTML = r"""<!doctype html>
  .light{background:#eeeed2}.dark{background:#769656}
  .p.w{color:#fbfbfb;text-shadow:0 0 2px #000,0 0 2px #000,0 0 3px #000}
  .p.b{color:#1a1a1a;text-shadow:0 0 1px #999}
+ .sq span{pointer-events:none}
  .sel{box-shadow:inset 0 0 0 4px #f6f669a0}
  .last{background:#bbcb44 !important}
  .tgt::after{content:"";position:absolute;width:22px;height:22px;border-radius:50%;
@@ -85,6 +86,15 @@ async function api(path,body){
    body:JSON.stringify(body)}:{}); return r.json();
 }
 function movable(name){return !!(st&&st.legal[name])&&!busy&&!st.gameover;}
+function highlightTargets(){
+ const tgts=sel&&st.legal[sel]?st.legal[sel]:[];
+ document.querySelectorAll('#board .sq').forEach(d=>{
+   const nm=d.dataset.sq, isT=tgts.includes(nm), piece=st.cells[idxOf(nm)];
+   d.classList.toggle('sel', nm===sel);
+   d.classList.toggle('tgt', isT&&!piece);
+   d.classList.toggle('tgtcap', isT&&!!piece);
+ });
+}
 function render(){
  const b=$('board'); b.innerHTML='';
  const ranks=humanColor==='white'?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
@@ -102,12 +112,14 @@ function render(){
    if(st.check&&piece&&piece[1]==='K'&&((piece[0]==='w')===(st.turn==='w')))d.classList.add('chk');
    d.onclick=()=>onClick(name);
    d.draggable=movable(name);
-   d.ondragstart=e=>{if(!movable(name)){e.preventDefault();return;}sel=name;render();
-     e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';};
+   d.ondragstart=e=>{if(!movable(name)){e.preventDefault();return;}
+     e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';
+     sel=name; highlightTargets();};   // NB: no full render() here — it would destroy the drag source
    d.ondragover=e=>e.preventDefault();
    d.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain')||sel;
      if(from&&st.legal[from]&&st.legal[from].includes(name))attemptMove(from,name);
      else{sel=null;render();}};
+   d.ondragend=e=>{if(!busy){sel=null;render();}};
    b.appendChild(d);
  }
 }
