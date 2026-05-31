@@ -16,11 +16,8 @@ build/
 tools/stockfish
 /tmp/
 
-# training data + nets (large/regenerable)
-data/*.bin
-data/*.npy
-data/*.npz
-data/*.jsonl
+# training data + nets (all regenerable; created at runtime)
+/data/
 *.nnue
 nets/
 
