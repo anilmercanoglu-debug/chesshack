@@ -1,0 +1,29 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# C++ build artifacts
+*.o
+*.obj
+*.so
+engine/chesshack
+engine/build/
+build/
+
+# tools (large binaries — fetched by tools/setup_env.sh)
+tools/stockfish
+/tmp/
+
+# training data + nets (large/regenerable)
+data/*.bin
+data/*.npy
+data/*.npz
+data/*.jsonl
+*.nnue
+nets/
+
+# logs
+*.log
+tools/.torch_status
