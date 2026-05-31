@@ -178,7 +178,11 @@ def pick_move(root: Node, temperature: float = 0.0,
 
 
 def root_value(root: Node) -> float:
-    """Visit-weighted value of the root position from its side-to-move POV."""
-    if root.N.sum() == 0:
+    """Visit-weighted value of the root position from its side-to-move POV.
+
+    Backup stores each child edge's W already in the ROOT's POV (the per-ply negation lands
+    on root after `depth` flips), so the visit-weighted mean is the root-POV value directly."""
+    total = root.N.sum()
+    if total == 0:
         return root.value
-    return float((root.W).sum() / root.N.sum()) * -1.0  # children W are from child POV-negated; root POV = -mean
+    return float(root.W.sum() / total)
