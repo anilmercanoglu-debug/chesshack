@@ -141,6 +141,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                  sims: int = SELFPLAY.sims, min_samples: int = 2000,
                  gate_every_games: int = SELFPLAY.gate_every_games,
                  gate_games: int = SELFPLAY.gate_games,
+                 gate_winrate: float = SELFPLAY.gate_winrate,
                  sg_every_games: int = SELFPLAY.sg_every_games,
                  sg_games: int = SELFPLAY.sg_games,
                  state_every_games: int = SELFPLAY.state_every_games,
@@ -254,7 +255,8 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
             # ---- game-based gate (promotion) ----
             if games - last_gate >= gate_every_games:
                 last_gate = games
-                d = gate(train_net, champion, device=device, games=gate_games, sims=sims_value.value)
+                d = gate(train_net, champion, device=device, games=gate_games,
+                         winrate=gate_winrate, sims=sims_value.value)
                 if d["promote"]:
                     before = elo_est
                     elo_est += _elo_gain(d["candidate_score"])
@@ -325,6 +327,7 @@ if __name__ == "__main__":
     ap.add_argument("--sims", type=int, default=SELFPLAY.sims)
     ap.add_argument("--gate-every-games", type=int, default=SELFPLAY.gate_every_games)
     ap.add_argument("--gate-games", type=int, default=SELFPLAY.gate_games)
+    ap.add_argument("--gate-winrate", type=float, default=SELFPLAY.gate_winrate)
     ap.add_argument("--sg-every-games", type=int, default=SELFPLAY.sg_every_games)
     ap.add_argument("--leaf-batch", type=int, default=SELFPLAY.worker_leaf_batch)
     ap.add_argument("--base-elo", type=float, default=SELFPLAY.base_elo)
@@ -338,6 +341,7 @@ if __name__ == "__main__":
     run_selfplay(args.init_from, cfg, args.workers, args.steps, device=dev,
                  batch=args.batch, lr=args.lr, sims=args.sims, capacity=args.capacity,
                  gate_every_games=args.gate_every_games,
-                 gate_games=args.gate_games, sg_every_games=args.sg_every_games,
+                 gate_games=args.gate_games, gate_winrate=args.gate_winrate,
+                 sg_every_games=args.sg_every_games,
                  leaf_batch=args.leaf_batch, base_elo=args.base_elo,
                  bench_every_promos=args.bench_every_promos, resume=args.resume)

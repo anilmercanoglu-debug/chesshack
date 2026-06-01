@@ -96,7 +96,7 @@ class SelfPlayConfig:
     search_gain_min: float = 0.60     # MCTS(net) vs raw-net-argmax win-rate target
     search_gain_bump_below: float = 0.55
     sims_ladder: tuple = (600, 900, 1200, 1600)
-    gate_winrate: float = 0.55        # promotion threshold
+    gate_winrate: float = 0.65        # promotion threshold (raised from 0.55: 0.55/30-games passes ~29% on noise; 0.65 ~5%)
     gate_games: int = 50              # games per gate (cheaper than 100; still decent SPRT-lite)
     gate_every_games: int = 4000      # run the gate every N generated games (not steps)
     sg_games: int = 30                # games per search_gain check
