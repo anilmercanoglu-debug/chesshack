@@ -46,7 +46,8 @@ class StockfishPlayer:
         cfg = {"Threads": threads, "Hash": hash_mb}
         if elo is not None:
             cfg["UCI_LimitStrength"] = True
-            cfg["UCI_Elo"] = int(elo)
+            # Stockfish only accepts UCI_Elo in [1320, 3190]; clamp to stay valid.
+            cfg["UCI_Elo"] = max(1320, min(3190, int(elo)))
         self.eng.configure(cfg)
         if nodes is not None:
             self.limit = chess.engine.Limit(nodes=nodes)
