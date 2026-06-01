@@ -45,6 +45,11 @@ INDEX_HTML = r"""<!doctype html>
  .tgtcap::after{content:"";position:absolute;width:54px;height:54px;border-radius:50%;
    box-shadow:inset 0 0 0 5px #20202055}
  .chk{background:#e06666 !important}
+ .left{display:flex;flex-direction:column;align-items:center}
+ #nav{margin-top:8px;width:486px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+ #nav button{font-size:16px;padding:4px 9px;margin:0}
+ #navInfo{font-size:13px;color:#bdbab5;min-width:96px;text-align:center}
+ #navSlider{flex:1;min-width:120px}
  .panel{min-width:240px;max-width:340px}
  h1{font-size:20px;margin:0 0 12px}
  button,select{font-size:15px;padding:7px 12px;margin:4px 4px 4px 0;background:#4a4844;
@@ -54,12 +59,24 @@ INDEX_HTML = r"""<!doctype html>
  #moves{margin-top:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;
    max-height:260px;overflow-y:auto;background:#1f1d1b;padding:8px 10px;border-radius:6px}
  #moves div{padding:1px 0}#moves div:nth-child(odd){background:#2a2825}
+ #moves span{cursor:pointer;padding:0 3px;border-radius:3px}
+ #moves span:hover{background:#3a3a37}#moves span.cur{background:#bbcb44;color:#111}
  .eval{font-weight:bold}
  label{display:block;margin-top:10px;font-size:14px;color:#bdbab5}
  input[type=range]{width:100%}
  #promo{display:none;margin-top:10px}#promo button{font-size:30px;padding:2px 10px}
 </style></head><body>
-<div id="board"></div>
+<div class="left">
+ <div id="board"></div>
+ <div id="nav">
+  <button id="navFirst" title="basa">&#9198;</button>
+  <button id="navPrev" title="geri (sol ok)">&#9664;</button>
+  <span id="navInfo">live</span>
+  <button id="navNext" title="ileri (sag ok)">&#9654;</button>
+  <button id="navLast" title="canliya don">&#9197; live</button>
+  <input id="navSlider" type="range" min="0" max="0" value="0">
+ </div>
+</div>
 <div class="panel">
  <h1>&#9823; ChessHack</h1>
  <button id="new">New game</button>
@@ -77,7 +94,9 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const GLYPH={K:'♚',Q:'♛',R:'♜',B:'♝',N:'♞',P:'♟'};
 const $=id=>document.getElementById(id);
-let st=null, humanColor='white', sel=null, busy=false, pendingPromo=null, lastMove=null, history=[];
+let positions=[], viewIdx=0, humanColor='white', sel=null, busy=false, pendingPromo=null, history=[];
+const live=()=>positions[positions.length-1];
+const atLive=()=>viewIdx===positions.length-1;
 
 function sqName(file,rank){return 'abcdefgh'[file]+(rank+1);}
 function idxOf(name){return (7-(+name[1]-1))*8+'abcdefgh'.indexOf(name[0]);}
@@ -85,51 +104,61 @@ async function api(path,body){
  const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify(body)}:{}); return r.json();
 }
-function movable(name){return !!(st&&st.legal[name])&&!busy&&!st.gameover;}
+function movable(name){return atLive()&&!!live().legal[name]&&!busy&&!live().gameover;}
 function highlightTargets(){
- const tgts=sel&&st.legal[sel]?st.legal[sel]:[];
+ const tgts=sel&&live().legal[sel]?live().legal[sel]:[];
  document.querySelectorAll('#board .sq').forEach(d=>{
-   const nm=d.dataset.sq, isT=tgts.includes(nm), piece=st.cells[idxOf(nm)];
+   const nm=d.dataset.sq, isT=tgts.includes(nm), piece=live().cells[idxOf(nm)];
    d.classList.toggle('sel', nm===sel);
    d.classList.toggle('tgt', isT&&!piece);
    d.classList.toggle('tgtcap', isT&&!!piece);
  });
 }
 function render(){
+ const view=positions[viewIdx]; if(!view)return;
  const b=$('board'); b.innerHTML='';
  const ranks=humanColor==='white'?[7,6,5,4,3,2,1,0]:[0,1,2,3,4,5,6,7];
  const files=humanColor==='white'?[0,1,2,3,4,5,6,7]:[7,6,5,4,3,2,1,0];
- const targets=sel&&st.legal[sel]?st.legal[sel]:[];
+ const targets=(atLive()&&sel&&live().legal[sel])?live().legal[sel]:[];
  for(const rank of ranks)for(const file of files){
-   const name=sqName(file,rank), i=(7-rank)*8+file, piece=st.cells[i];
+   const name=sqName(file,rank), i=(7-rank)*8+file, piece=view.cells[i];
    const d=document.createElement('div');
    d.className='sq '+((file+rank)%2?'light':'dark'); d.dataset.sq=name;
    if(piece){const g=document.createElement('span');g.className='p '+piece[0];
      g.textContent=GLYPH[piece[1]];d.appendChild(g);}
-   if(name===sel)d.classList.add('sel');
-   if(lastMove&&(name===lastMove[0]||name===lastMove[1]))d.classList.add('last');
+   if(atLive()&&name===sel)d.classList.add('sel');
+   if(view.last&&(name===view.last[0]||name===view.last[1]))d.classList.add('last');
    if(targets.includes(name))d.classList.add(piece?'tgtcap':'tgt');
-   if(st.check&&piece&&piece[1]==='K'&&((piece[0]==='w')===(st.turn==='w')))d.classList.add('chk');
+   if(view.check&&piece&&piece[1]==='K'&&((piece[0]==='w')===(view.turn==='w')))d.classList.add('chk');
    d.onclick=()=>onClick(name);
    d.draggable=movable(name);
    d.ondragstart=e=>{if(!movable(name)){e.preventDefault();return;}
      e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';
-     sel=name; highlightTargets();   // NB: no full render() here — it would destroy the drag source
+     sel=name; highlightTargets();
      const sp=d.querySelector('span'); if(sp)setTimeout(()=>{sp.style.visibility='hidden';},0);};
    d.ondragover=e=>e.preventDefault();
-   d.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain')||sel;
-     if(from&&st.legal[from]&&st.legal[from].includes(name))attemptMove(from,name);
+   d.ondrop=e=>{e.preventDefault();if(!atLive())return;const from=e.dataTransfer.getData('text/plain')||sel;
+     if(from&&live().legal[from]&&live().legal[from].includes(name))attemptMove(from,name);
      else{sel=null;render();}};
    d.ondragend=e=>{if(!busy){sel=null;render();}};
    b.appendChild(d);
  }
+ renderNav();
 }
+function renderNav(){
+ const n=positions.length-1, s=$('navSlider');
+ s.max=n; s.value=viewIdx;
+ $('navInfo').textContent=atLive()?('live '+viewIdx+'/'+n):('inceleme '+viewIdx+'/'+n);
+ renderMoves();
+}
+function setView(i){viewIdx=Math.max(0,Math.min(positions.length-1,i));sel=null;render();}
+function pushPos(state,lastMove){state.last=lastMove||null;positions.push(state);viewIdx=positions.length-1;}
 function setStatus(h){$('status').innerHTML=h;}
-function gameOverMsg(){return st.gameover?('<br><b>Game over: '+st.result+'</b>'):'';}
-function needPromo(from,to){const p=st.cells[idxOf(from)];
+function gameOverMsg(){return live().gameover?('<br><b>Game over: '+live().result+'</b>'):'';}
+function needPromo(from,to){const p=live().cells[idxOf(from)];
  return !!p&&p[1]==='P'&&(to[1]==='8'||to[1]==='1');}
 function attemptMove(from,to){
- if(busy||st.gameover)return;
+ if(busy||live().gameover)return;
  if(needPromo(from,to)){pendingPromo=[from,to];$('promo').style.display='block';return;}
  doMove(from,to,null);
 }
@@ -137,49 +166,61 @@ function botMsg(bot){const s=bot.eval>=0?'+':'';
  return 'bot played <b>'+bot.san+'</b><br><span class="eval">eval '+s+bot.eval.toFixed(2)+
    '</span> (bot POV), '+bot.sims+' sims'+gameOverMsg();}
 function renderMoves(){
- let h=''; for(let i=0;i<history.length;i+=2){const n=i/2+1;
-   h+='<div>'+n+'. '+history[i]+(history[i+1]?' '+history[i+1]:'')+'</div>';}
- const m=$('moves'); m.innerHTML=h; m.scrollTop=m.scrollHeight;
+ let h='';
+ for(let i=0;i<history.length;i+=2){const n=i/2+1;
+   h+='<div>'+n+'. '+mv(i)+(history[i+1]?' '+mv(i+1):'')+'</div>';}
+ $('moves').innerHTML=h;
+ if(atLive()){const m=$('moves');m.scrollTop=m.scrollHeight;}
+ function mv(k){return '<span'+(viewIdx===k+1?' class="cur"':'')+' onclick="setView('+(k+1)+')">'+history[k]+'</span>';}
 }
 async function doMove(from,to,promo){
  busy=true; sel=null;
- // 1) apply + render MY move immediately (fast server call, no search)
- const r1=await api('/api/move',{fen:st.fen,from,to,promotion:promo||null});
+ const r1=await api('/api/move',{fen:live().fen,from,to,promotion:promo||null});
  if(r1.error){busy=false; render(); setStatus('error: '+r1.error); return;}
- history.push(r1.san); lastMove=[from,to]; st=r1.state; render(); renderMoves();
- if(st.gameover){busy=false; setStatus('move played.'+gameOverMsg()); return;}
- // 2) now the bot thinks, then render its reply
+ history.push(r1.san); pushPos(r1.state,[from,to]); render();
+ if(live().gameover){busy=false; setStatus('move played.'+gameOverMsg()); return;}
  setStatus('bot is thinking&hellip;');
- const r2=await api('/api/botmove',{fen:st.fen,sims:+$('sims').value});
- if(r2.bot){history.push(r2.bot.san); lastMove=[r2.bot.from,r2.bot.to];}
- st=r2.state; render(); renderMoves();
+ const r2=await api('/api/botmove',{fen:live().fen,sims:+$('sims').value});
+ if(r2.bot){history.push(r2.bot.san); pushPos(r2.state,[r2.bot.from,r2.bot.to]);}
+ else pushPos(r2.state,null);
+ render();
  setStatus(r2.bot?botMsg(r2.bot):('your move.'+gameOverMsg()));
  busy=false;
 }
 function onClick(name){
- if(busy||!st||st.gameover)return;
- const targets=sel&&st.legal[sel]?st.legal[sel]:[];
+ if(!atLive())return;            // reviewing past moves -> board read-only; use nav to return
+ if(busy||live().gameover)return;
+ const targets=sel&&live().legal[sel]?live().legal[sel]:[];
  if(sel&&targets.includes(name)){attemptMove(sel,name);return;}
- if(st.legal[name]){sel=name;render();} else {sel=null;render();}
+ if(live().legal[name]){sel=name;render();} else {sel=null;render();}
 }
 async function botFirst(){
  busy=true; setStatus('bot is thinking&hellip;');
- const res=await api('/api/botmove',{fen:st.fen,sims:+$('sims').value});
- if(res.bot){history.push(res.bot.san); lastMove=[res.bot.from,res.bot.to];}
- st=res.state; render(); renderMoves();
+ const res=await api('/api/botmove',{fen:live().fen,sims:+$('sims').value});
+ if(res.bot){history.push(res.bot.san); pushPos(res.state,[res.bot.from,res.bot.to]);}
+ else pushPos(res.state,null);
+ render();
  setStatus(res.bot?botMsg(res.bot):'your move.'); busy=false;
 }
 async function newGame(){
  const choice=$('color').value;
  humanColor=choice==='random'?(Math.random()<0.5?'white':'black'):choice;
- sel=null; lastMove=null; history=[]; $('promo').style.display='none';
- st=await api('/api/new'); render(); renderMoves();
+ sel=null; history=[]; positions=[]; viewIdx=0; $('promo').style.display='none';
+ const st0=await api('/api/new'); st0.last=null; positions=[st0]; viewIdx=0; render();
  $('who').textContent='You play '+humanColor.toUpperCase()+(choice==='random'?' (random)':'');
  setStatus(humanColor==='white'?'Your move. Click or drag a piece.':'Bot moves first&hellip;');
  if(humanColor==='black')botFirst();
 }
 $('new').onclick=newGame;
 $('sims').oninput=e=>$('simsv').textContent=e.target.value;
+$('navFirst').onclick=()=>setView(0);
+$('navPrev').onclick=()=>setView(viewIdx-1);
+$('navNext').onclick=()=>setView(viewIdx+1);
+$('navLast').onclick=()=>setView(positions.length-1);
+$('navSlider').oninput=e=>setView(+e.target.value);
+document.addEventListener('keydown',e=>{
+ if(e.key==='ArrowLeft')setView(viewIdx-1);
+ else if(e.key==='ArrowRight')setView(viewIdx+1);});
 document.querySelectorAll('#promo button').forEach(btn=>btn.onclick=()=>{
  $('promo').style.display='none'; const [f,t]=pendingPromo; doMove(f,t,btn.dataset.p);});
 newGame();
