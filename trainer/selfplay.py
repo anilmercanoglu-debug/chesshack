@@ -329,12 +329,15 @@ if __name__ == "__main__":
     ap.add_argument("--leaf-batch", type=int, default=SELFPLAY.worker_leaf_batch)
     ap.add_argument("--base-elo", type=float, default=SELFPLAY.base_elo)
     ap.add_argument("--bench-every-promos", type=int, default=0)
+    ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--capacity", type=int, default=SELFPLAY.replay_capacity)
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     cfg = DEV_NET if args.net == "dev" else PROD_NET
     run_selfplay(args.init_from, cfg, args.workers, args.steps, device=dev,
-                 batch=args.batch, sims=args.sims, gate_every_games=args.gate_every_games,
+                 batch=args.batch, lr=args.lr, sims=args.sims, capacity=args.capacity,
+                 gate_every_games=args.gate_every_games,
                  gate_games=args.gate_games, sg_every_games=args.sg_every_games,
                  leaf_batch=args.leaf_batch, base_elo=args.base_elo,
                  bench_every_promos=args.bench_every_promos, resume=args.resume)
