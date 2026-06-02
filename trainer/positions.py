@@ -76,25 +76,61 @@ def sparse_endgame(rng: random.Random) -> Optional[chess.Board]:
     return board
 
 
-def pgn_fens(pgn_path: str, max_games: int, rng: random.Random) -> Iterator[chess.Board]:
+def _open_pgn(pgn_path: str):
+    """Open a .pgn or .pgn.zst for text reading. Lichess dumps are .zst and huge, so stream
+    them (needs the `zstandard` package) instead of decompressing to disk."""
+    if pgn_path.endswith(".zst"):
+        try:
+            import zstandard
+        except ImportError as e:
+            raise RuntimeError(
+                "Reading .zst needs `pip install zstandard` (or decompress to .pgn first: "
+                "`unzstd file.pgn.zst`).") from e
+        import io
+        dctx = zstandard.ZstdDecompressor()
+        return io.TextIOWrapper(dctx.stream_reader(open(pgn_path, "rb")),
+                                encoding="utf-8", errors="replace")
+    return open(pgn_path, encoding="utf-8", errors="replace")
+
+
+def pgn_fens(pgn_path: str, rng: random.Random, max_games: Optional[int] = None,
+             per_game: int = 12, skip_plies: int = 8) -> Iterator[chess.Board]:
+    """Stream FENs from a PGN, advancing through games (file opened ONCE — the old version
+    reopened per game with max_games=1, re-reading game #1 forever). Skips the first
+    `skip_plies` (shared opening theory → near-duplicates), then takes up to `per_game`
+    positions spread evenly across the rest of EACH game, so every game contributes real
+    opening, middlegame AND endgame positions (not just the first few plies)."""
     import chess.pgn
-    with open(pgn_path) as f:
-        for _ in range(max_games):
+    f = _open_pgn(pgn_path)
+    games = 0
+    try:
+        while max_games is None or games < max_games:
             game = chess.pgn.read_game(f)
             if game is None:
                 break
+            games += 1
+            moves = list(game.mainline_moves())
+            usable = len(moves) - skip_plies
+            if usable <= 0:
+                continue
+            k = min(per_game, usable)
+            # evenly-spaced ply indices across skip_plies..end, with a small per-game jitter
+            jit = rng.randint(0, max(1, usable // (k + 1)))
+            want = {skip_plies + min(usable - 1, jit + usable * i // k) for i in range(k)}
             board = game.board()
-            ply = 0
-            for move in game.mainline_moves():
+            for ply, move in enumerate(moves, 1):
                 board.push(move)
-                ply += 1
-                if ply % 6 == 0:  # ~1 in 6 plies, capped per game
+                if ply in want:
                     yield board.copy(stack=False)
+    finally:
+        f.close()
 
 
-def generate_positions(n: int, seed: int = 0, pgn_path: Optional[str] = None
-                       ) -> List[str]:
-    """Return up to `n` de-duplicated, phase-stratified, stm-balanced FENs."""
+def generate_positions(n: int, seed: int = 0, pgn_path: Optional[str] = None,
+                       pgn_frac: float = 0.85) -> List[str]:
+    """Return up to `n` de-duplicated, phase-stratified, stm-balanced FENs. When a PGN is
+    given, ~`pgn_frac` of draws come from real games (the rest synthetic for off-book /
+    sparse-endgame coverage); falls back fully to synthetic once the PGN is exhausted."""
     rng = random.Random(seed)
     target = {"opening": int(0.35 * n), "middle": int(0.40 * n), "end": n}  # end gets remainder
     counts: Counter = Counter()
@@ -119,14 +155,21 @@ def generate_positions(n: int, seed: int = 0, pgn_path: Optional[str] = None
         stm_counts[board.turn] += 1
         out.append(board.fen())
 
+    pgn_gen = pgn_fens(pgn_path, rng) if pgn_path else None
+    pgn_done = pgn_gen is None
+
     guard = 0
     while len(out) < n and guard < n * 50:
         guard += 1
-        r = rng.random()
-        if pgn_path and r < 0.40:
-            for b in pgn_fens(pgn_path, 1, rng):
-                consider(b)
-        elif r < 0.70:
+        if not pgn_done and rng.random() < pgn_frac:
+            try:
+                consider(next(pgn_gen))
+            except StopIteration:
+                pgn_done = True  # PGN exhausted -> remaining draws go to synthetic sources
+            continue
+        # synthetic sources: off-book playouts + sparse endgames (also fill phase buckets
+        # / coverage the PGN under-supplies)
+        if rng.random() < 0.7:
             bias = 0.0 if rng.random() < 0.5 else 0.4  # half pure-random, half capture-biased
             for b in random_playout(rng, capture_bias=bias):
                 consider(b)
