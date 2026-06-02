@@ -320,7 +320,7 @@ def _auto_bench(net, device, games, promotions, elo_est):
     """Optional real Elo bench on the champion (logs to elo_history.json)."""
     try:
         from bench.elo import measure_elo, append_history
-        res = measure_elo(net, device=device, rungs=(1500, 1800, 2000, 2200, 2400),
+        res = measure_elo(net, device=device, rungs=(1800, 2100, 2400),
                           games_per_rung=10, sims=400, verbose=False)
         append_history({"games": games, "promotions": promotions,
                         "elo": res["elo"], "ci": res["ci"], "elo_est": elo_est})
