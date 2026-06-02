@@ -269,7 +269,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
             if games - last_gate >= gate_every_games:
                 last_gate = games
                 d = gate(train_net, champion, device=device, games=gate_games,
-                         winrate=gate_winrate, sims=sims_value.value)
+                         winrate=gate_winrate, sims=sims_value.value, openings=openings)
                 if d["promote"]:
                     before = elo_est
                     elo_est += _elo_gain(d["candidate_score"])

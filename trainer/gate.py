@@ -10,9 +10,9 @@ from bench.arena import MCTSPlayer, play_match
 def gate(candidate_net, champion_net, device: str = "cpu",
          games: int = SELFPLAY.gate_games, sims: int = SELFPLAY.sims,
          winrate: float = SELFPLAY.gate_winrate, leaf_batch: int = MCTS_CFG.leaf_batch,
-         seed: int = 0) -> dict:
+         seed: int = 0, openings=None) -> dict:
     cand = MCTSPlayer(candidate_net, sims=sims, device=device, leaf_batch=leaf_batch, temperature=0.0)
     champ = MCTSPlayer(champion_net, sims=sims, device=device, leaf_batch=leaf_batch, temperature=0.0)
-    score, detail = play_match(cand, champ, games, seed=seed)
+    score, detail = play_match(cand, champ, games, seed=seed, openings=openings)
     detail.update({"candidate_score": score, "threshold": winrate, "promote": score >= winrate})
     return detail

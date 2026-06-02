@@ -71,11 +71,13 @@ OPENINGS: List[List[str]] = [
 
 
 def play_game(white, black, opening: Optional[List[str]] = None, max_plies: int = 320,
-              rng=None) -> float:
-    """Return result from White's POV: 1.0 win, 0.5 draw, 0.0 loss."""
-    board = chess.Board()
-    for uci in (opening or []):
-        board.push(chess.Move.from_uci(uci))
+              rng=None, start_fen: Optional[str] = None) -> float:
+    """Return result from White's POV: 1.0 win, 0.5 draw, 0.0 loss. If start_fen is given the
+    game starts from that position (the move-list `opening` is then ignored)."""
+    board = chess.Board(start_fen) if start_fen else chess.Board()
+    if not start_fen:
+        for uci in (opening or []):
+            board.push(chess.Move.from_uci(uci))
     plies = 0
     while not board.is_game_over(claim_draw=True) and plies < max_plies:
         mover = white if board.turn == chess.WHITE else black
@@ -88,20 +90,28 @@ def play_game(white, black, opening: Optional[List[str]] = None, max_plies: int 
     return {"1-0": 1.0, "0-1": 0.0, "1/2-1/2": 0.5}.get(res, 0.5)
 
 
-def play_match(player_a, player_b, n_games: int, seed: int = 0, max_plies: int = 320
-               ) -> Tuple[float, dict]:
-    """Alternate colors. Return (player_a score fraction, detail dict)."""
+def play_match(player_a, player_b, n_games: int, seed: int = 0, max_plies: int = 320,
+               openings: Optional[List[str]] = None) -> Tuple[float, dict]:
+    """Alternate colors. Return (player_a score fraction, detail dict). If `openings` (a list
+    of start FENs) is given, each consecutive pair of games is played from one of those FENs
+    with colors swapped — so deterministic (temperature=0) players still produce n_games
+    DISTINCT games instead of repeating the few hardcoded move-list openings."""
     rng = random.Random(seed)
     nrng = __import__("numpy").random.default_rng(seed)
     score_a = 0.0
     w = d = l = 0
     for i in range(n_games):
-        opening = OPENINGS[i % len(OPENINGS)]
+        if openings:
+            start_fen = openings[(seed + i // 2) % len(openings)]
+            opening = None
+        else:
+            start_fen = None
+            opening = OPENINGS[i % len(OPENINGS)]
         if i % 2 == 0:
-            r = play_game(player_a, player_b, opening, max_plies, rng=nrng)
+            r = play_game(player_a, player_b, opening, max_plies, rng=nrng, start_fen=start_fen)
             sa = r
         else:
-            r = play_game(player_b, player_a, opening, max_plies, rng=nrng)
+            r = play_game(player_b, player_a, opening, max_plies, rng=nrng, start_fen=start_fen)
             sa = 1.0 - r
         score_a += sa
         w += sa == 1.0
