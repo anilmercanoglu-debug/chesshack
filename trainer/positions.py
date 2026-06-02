@@ -126,6 +126,37 @@ def pgn_fens(pgn_path: str, rng: random.Random, max_games: Optional[int] = None,
         f.close()
 
 
+def opening_fens(pgn_path: str, n: int, rng: random.Random,
+                 min_ply: int = 8, max_ply: int = 16, max_games: Optional[int] = None
+                 ) -> List[str]:
+    """One opening position per game, at a random ply in [min_ply, max_ply]. Real, balanced,
+    diverse openings to SEED self-play from — the anti echo-chamber lever: the generator is
+    forced to visit positions OUTSIDE its own preferred lines. Returns up to `n` FEN strings."""
+    import chess.pgn
+    out: List[str] = []
+    f = _open_pgn(pgn_path)
+    games = 0
+    try:
+        while len(out) < n and (max_games is None or games < max_games):
+            game = chess.pgn.read_game(f)
+            if game is None:
+                break
+            games += 1
+            moves = list(game.mainline_moves())
+            if len(moves) < min_ply:
+                continue
+            k = rng.randint(min_ply, min(max_ply, len(moves)))
+            board = game.board()
+            for i, mv in enumerate(moves, 1):
+                board.push(mv)
+                if i == k:
+                    out.append(board.fen())
+                    break
+    finally:
+        f.close()
+    return out
+
+
 def generate_positions(n: int, seed: int = 0, pgn_path: Optional[str] = None,
                        pgn_frac: float = 0.85) -> List[str]:
     """Return up to `n` de-duplicated, phase-stratified, stm-balanced FENs. When a PGN is

@@ -51,10 +51,15 @@ def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_valu
     lb = params["leaf_batch"]; temp = params["temperature"]; tplies = params["temperature_plies"]
     zw = params["zw"]; qw = params["qw"]
     cpuct = params["c_puct"]; da = params["dir_alpha"]; de = params["dir_eps"]
+    openings = params.get("openings"); rof = float(params.get("random_open_frac", 0.0))
 
     while not stop_evt.is_set():
         sims = int(sims_value.value)
         board = _chess.Board()
+        # seed a fraction of games from a real opening position (anti echo-chamber): the
+        # forced-opening moves are NOT recorded; samples come from the self-play continuation.
+        if openings and rof and rng.random() < rof:
+            board = _chess.Board(openings[int(rng.integers(len(openings)))])
         samples = []
         plies = 0
         while not board.is_game_over(claim_draw=True) and plies < MAX_PLIES:
@@ -150,10 +155,17 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                  max_batch: int = 256, out_dir=NETS_DIR, log_every: int = 100,
                  leaf_batch: int = SELFPLAY.worker_leaf_batch,
                  base_elo: float = SELFPLAY.base_elo, resume: bool = False,
-                 bench_every_promos: int = 0):
+                 bench_every_promos: int = 0,
+                 random_open_frac: float = 0.0, openings_path: str = None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     state_path = out_dir / "selfplay_state.pt"
+
+    openings = None
+    if openings_path:
+        openings = [ln.strip() for ln in open(openings_path) if ln.strip()]
+        print(f"[selfplay] {len(openings)} opening positions from {openings_path} "
+              f"(random_open_frac={random_open_frac})")
 
     # --- nets + optimizer ---
     champion, _ = load_checkpoint(init_ckpt, map_location=device, expect_cfg=net_cfg)
@@ -190,7 +202,8 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                   temperature_plies=SELFPLAY.temperature_plies,
                   zw=SELFPLAY.value_z_weight, qw=SELFPLAY.value_q_weight,
                   c_puct=MCTS_CFG.c_puct, dir_alpha=MCTS_CFG.dirichlet_alpha,
-                  dir_eps=MCTS_CFG.dirichlet_eps)
+                  dir_eps=MCTS_CFG.dirichlet_eps,
+                  random_open_frac=random_open_frac, openings=openings)
     procs = [ctx.Process(target=_selfplay_worker,
                          args=(i, server.request_q, server.result_qs[i], game_q, stop,
                                sims_value, 1234 + i, params), daemon=True)
@@ -334,6 +347,10 @@ if __name__ == "__main__":
     ap.add_argument("--bench-every-promos", type=int, default=0)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--capacity", type=int, default=SELFPLAY.replay_capacity)
+    ap.add_argument("--openings", type=str, default=None,
+                    help="file of opening FENs (one per line) to seed games from")
+    ap.add_argument("--random-open-frac", type=float, default=SELFPLAY.random_open_frac,
+                    help="fraction of games started from a random opening in --openings")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -344,4 +361,5 @@ if __name__ == "__main__":
                  gate_games=args.gate_games, gate_winrate=args.gate_winrate,
                  sg_every_games=args.sg_every_games,
                  leaf_batch=args.leaf_batch, base_elo=args.base_elo,
-                 bench_every_promos=args.bench_every_promos, resume=args.resume)
+                 bench_every_promos=args.bench_every_promos, resume=args.resume,
+                 random_open_frac=args.random_open_frac, openings_path=args.openings)
