@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from config import (DEV_NET, PROD_NET, POLICY_SIZE, SELFPLAY, MCTS as MCTS_CFG, NETS_DIR)
+from config import (DEV_NET, PROD_NET, SCALE_NET, POLICY_SIZE, SELFPLAY, MCTS as MCTS_CFG, NETS_DIR)
 from engine.net import ChessNet, load_checkpoint, save_checkpoint, masked_log_softmax, value_from_wdl
 from engine.encoding import board_to_planes, legal_mask
 from engine.inference_server import InferenceServer, ServerEvaluator
@@ -333,7 +333,7 @@ def _auto_bench(net, device, games, promotions, elo_est):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--init-from", type=str, default=str(NETS_DIR / "distilled.pt"))
-    ap.add_argument("--net", choices=["dev", "prod"], default="dev")
+    ap.add_argument("--net", choices=["dev", "prod", "scale"], default="dev")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--steps", type=int, default=300000)
     ap.add_argument("--batch", type=int, default=256)
@@ -354,7 +354,7 @@ if __name__ == "__main__":
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    cfg = DEV_NET if args.net == "dev" else PROD_NET
+    cfg = {"dev": DEV_NET, "prod": PROD_NET, "scale": SCALE_NET}[args.net]
     run_selfplay(args.init_from, cfg, args.workers, args.steps, device=dev,
                  batch=args.batch, lr=args.lr, sims=args.sims, capacity=args.capacity,
                  gate_every_games=args.gate_every_games,

@@ -19,7 +19,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from config import DEV_NET, PROD_NET, NETS_DIR
+from config import DEV_NET, PROD_NET, SCALE_NET, NETS_DIR
 from engine.net import ChessNet, masked_log_softmax, save_checkpoint, load_checkpoint, count_params
 from trainer.dataset import ChessDataset
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["distill", "selfplay"], default="distill")
     ap.add_argument("--data", type=str, default="data/distill_dev")
-    ap.add_argument("--net", choices=["dev", "prod"], default="dev")
+    ap.add_argument("--net", choices=["dev", "prod", "scale"], default="dev")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=2e-3)
@@ -117,6 +117,6 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=str, default=str(NETS_DIR / "distilled.pt"))
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
-    cfg = DEV_NET if args.net == "dev" else PROD_NET
+    cfg = {"dev": DEV_NET, "prod": PROD_NET, "scale": SCALE_NET}[args.net]
     train(args.mode, args.data, cfg, args.steps, args.batch, args.lr,
           args.init_from, Path(args.out), num_workers=args.workers)
