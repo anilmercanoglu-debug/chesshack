@@ -41,7 +41,7 @@ class NetConfig:
 
 DEV_NET = NetConfig(channels=192, blocks=15)     # ~10.7M — local CPU dev
 PROD_NET = NetConfig(channels=256, blocks=20)    # ~24.5M — 80GB production
-SCALE_NET = NetConfig(channels=320, blocks=24)   # ~45.5M — late-game scale-up
+SCALE_NET = NetConfig(channels=384, blocks=28)   # ~76M — large scale-up (capacity test)
 
 
 # ---------------------------------------------------------------------------
