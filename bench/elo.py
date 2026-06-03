@@ -46,14 +46,14 @@ def fit_elo(results: List[Tuple[float, int, float]]) -> Tuple[float, float]:
 
 def measure_elo(net, device: str = "cpu", rungs=BENCH.elo_ladder, games_per_rung: int = 20,
                 sims: int = BENCH.sims, leaf_batch: int = 16, sf_movetime: float = 0.05,
-                verbose: bool = True) -> dict:
+                verbose: bool = True, openings=None) -> dict:
     us = MCTSPlayer(net, sims=sims, device=device, leaf_batch=leaf_batch, temperature=0.0)
     results: List[Tuple[float, int, float]] = []
     detail = []
     for rung in rungs:
         sf = StockfishPlayer(elo=rung, movetime=sf_movetime)
         try:
-            score, d = play_match(us, sf, games_per_rung, seed=rung)
+            score, d = play_match(us, sf, games_per_rung, seed=rung, openings=openings)
         finally:
             sf.close()
         results.append((float(rung), games_per_rung, score))
@@ -83,15 +83,20 @@ if __name__ == "__main__":
     ap.add_argument("--sims", type=int, default=BENCH.sims)
     ap.add_argument("--rungs", type=int, nargs="*", default=None)
     ap.add_argument("--sf-movetime", type=float, default=0.05)
+    ap.add_argument("--openings", type=str, default=None,
+                    help="file of opening FENs (one per line); diverse starts -> distinct games per rung")
     ap.add_argument("--step", type=int, default=0)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     net, _ = load_checkpoint(args.ckpt, map_location=dev)
     net = net.to(dev)
     rungs = args.rungs or BENCH.elo_ladder
+    openings = [ln.strip() for ln in open(args.openings) if ln.strip()] if args.openings else None
+    if openings:
+        print(f"[elo] {len(openings)} opening positions from {args.openings}")
     t = time.time()
     res = measure_elo(net, device=dev, rungs=rungs, games_per_rung=args.games,
-                      sims=args.sims, sf_movetime=args.sf_movetime)
+                      sims=args.sims, sf_movetime=args.sf_movetime, openings=openings)
     print(f"\nEstimated Elo: {res['elo']:.0f} ± {res['ci']:.0f}  "
           f"(sims={args.sims}, {time.time()-t:.0f}s)")
     append_history({"step": args.step, "elo": res["elo"], "ci": res["ci"],
