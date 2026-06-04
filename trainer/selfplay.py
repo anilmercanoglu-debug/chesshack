@@ -235,6 +235,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
     last_gate = last_sg = last_state = last_bench = last_grow = games
     consecutive_holds = 0
     t0 = time.time()
+    games0 = games          # games at session start -> g/s reflects THIS session, not the resumed total
 
     def save_state():
         torch.save({
@@ -278,7 +279,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                 if steps % log_every == 0:
                     print(f"[selfplay] step {steps:6d} games={games} buf={len(replay)} "
                           f"pl={pl_ema:.3f} vl={vl_ema:.3f} sims={sims_value.value} est.Elo~{elo_est:.0f} "
-                          f"avg_batch={server.avg_batch:.1f} ({games/(time.time()-t0):.2f} g/s)")
+                          f"avg_batch={server.avg_batch:.1f} ({(games-games0)/(time.time()-t0):.2f} g/s)")
 
             # ---- game-based gate (promotion) ----
             if games - last_gate >= gate_every_games:
