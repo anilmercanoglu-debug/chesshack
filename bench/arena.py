@@ -10,15 +10,23 @@ import chess.engine
 
 from config import STOCKFISH, MCTS as MCTS_CFG
 from engine.player import Player, RawPolicyPlayer
+from engine.mate_search import find_forced_mate
 
 
 class MCTSPlayer:
     def __init__(self, net, sims: int = MCTS_CFG.sims_bench, device: str = "cpu",
-                 leaf_batch: int = MCTS_CFG.leaf_batch, temperature: float = 0.0):
+                 leaf_batch: int = MCTS_CFG.leaf_batch, temperature: float = 0.0,
+                 mate_depth: int = 0, mate_nodes: int = 200_000):
         self.player = Player(net, device, sims, leaf_batch)
         self.temperature = temperature
+        self.mate_depth = mate_depth          # 0 = off; >0 = try a forced-mate search first (NN-independent)
+        self.mate_nodes = mate_nodes
 
     def play(self, board: chess.Board, rng=None) -> Optional[chess.Move]:
+        if self.mate_depth:
+            mv, _ = find_forced_mate(board, self.mate_depth, self.mate_nodes)
+            if mv is not None:
+                return mv                      # guaranteed mate -> play it, skip MCTS
         return self.player.choose(board, temperature=self.temperature, rng=rng)[0]
 
     def close(self):
