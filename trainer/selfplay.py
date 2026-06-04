@@ -155,7 +155,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                  max_batch: int = 256, out_dir=NETS_DIR, log_every: int = 100,
                  leaf_batch: int = SELFPLAY.worker_leaf_batch,
                  base_elo: float = SELFPLAY.base_elo, resume: bool = False,
-                 bench_every_promos: int = 0,
+                 bench_every_promos: int = 0, bench_every_games: int = 0,
                  random_open_frac: float = 0.0, openings_path: str = None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,11 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
               f"(random_open_frac={random_open_frac})")
 
     # --- nets + optimizer ---
-    champion, _ = load_checkpoint(init_ckpt, map_location=device, expect_cfg=net_cfg)
+    if init_ckpt == "scratch":
+        champion = ChessNet(net_cfg)
+        print("[selfplay] starting from a RANDOM net (pure self-play, no distillation)")
+    else:
+        champion, _ = load_checkpoint(init_ckpt, map_location=device, expect_cfg=net_cfg)
     champion = champion.to(device).eval()
     train_net = ChessNet(net_cfg).to(device)
     train_net.load_state_dict(champion.state_dict())
@@ -218,7 +222,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
     rng = np.random.default_rng(0)
     fresh = 0.0
     pl_ema = vl_ema = None
-    last_gate = last_sg = last_state = games
+    last_gate = last_sg = last_state = last_bench = games
     t0 = time.time()
 
     def save_state():
@@ -283,7 +287,7 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                           f"{d['candidate_score']:.3f} (W{d['wins']}/D{d['draws']}/L{d['losses']})  "
                           f"est.Elo ~{before:.0f} -> ~{elo_est:.0f}")
                     if bench_every_promos and promotions % bench_every_promos == 0:
-                        _auto_bench(champion, device, games, promotions, elo_est)
+                        _auto_bench(champion, device, games, promotions, elo_est, openings=openings)
                 else:
                     print(f"[gate]   held @ {games} games: {d['candidate_score']:.3f} < {d['threshold']:.2f}")
 
@@ -297,6 +301,11 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                     print(f"[anti-stall] search_gain {wr:.3f} low -> sims bumped to {new_sims}")
                 else:
                     print(f"[anti-stall] search_gain {wr:.3f} (sims {sims_value.value})")
+
+            # ---- game-based real-Elo checkup (independent of promotions) ----
+            if bench_every_games and games - last_bench >= bench_every_games:
+                last_bench = games
+                _auto_bench(champion, device, games, promotions, elo_est, openings=openings)
 
             # ---- periodic full-state checkpoint (for --resume) ----
             if games - last_state >= state_every_games:
@@ -316,12 +325,14 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
               f"est.Elo~{elo_est:.0f} elapsed={time.time()-t0:.0f}s avg_batch={server.avg_batch:.1f}")
 
 
-def _auto_bench(net, device, games, promotions, elo_est):
-    """Optional real Elo bench on the champion (logs to elo_history.json)."""
+def _auto_bench(net, device, games, promotions, elo_est, openings=None):
+    """Optional real Elo bench on the champion (logs to elo_history.json). Wide ladder from
+    1320 + early-stop: works for a weak from-scratch net (loses low -> stops fast, fits low)
+    through a strong one (climbs the ladder)."""
     try:
         from bench.elo import measure_elo, append_history
-        res = measure_elo(net, device=device, rungs=(1800, 2100, 2400),
-                          games_per_rung=10, sims=400, verbose=False)
+        res = measure_elo(net, device=device, rungs=(1320, 1500, 1700, 1900, 2100),
+                          games_per_rung=10, sims=400, verbose=False, openings=openings)
         append_history({"games": games, "promotions": promotions,
                         "elo": res["elo"], "ci": res["ci"], "elo_est": elo_est})
         print(f"[bench]   real Elo {res['elo']:.0f} ± {res['ci']:.0f} "
@@ -332,7 +343,8 @@ def _auto_bench(net, device, games, promotions, elo_est):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--init-from", type=str, default=str(NETS_DIR / "distilled.pt"))
+    ap.add_argument("--init-from", type=str, default=str(NETS_DIR / "distilled.pt"),
+                    help="checkpoint to start from, or 'scratch' for a random net (pure self-play)")
     ap.add_argument("--net", choices=["dev", "prod", "scale"], default="dev")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--steps", type=int, default=300000)
@@ -345,6 +357,8 @@ if __name__ == "__main__":
     ap.add_argument("--leaf-batch", type=int, default=SELFPLAY.worker_leaf_batch)
     ap.add_argument("--base-elo", type=float, default=SELFPLAY.base_elo)
     ap.add_argument("--bench-every-promos", type=int, default=0)
+    ap.add_argument("--bench-every-games", type=int, default=0,
+                    help="run a real SF-anchored Elo checkup every N generated games")
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--capacity", type=int, default=SELFPLAY.replay_capacity)
     ap.add_argument("--openings", type=str, default=None,
@@ -361,5 +375,6 @@ if __name__ == "__main__":
                  gate_games=args.gate_games, gate_winrate=args.gate_winrate,
                  sg_every_games=args.sg_every_games,
                  leaf_batch=args.leaf_batch, base_elo=args.base_elo,
-                 bench_every_promos=args.bench_every_promos, resume=args.resume,
+                 bench_every_promos=args.bench_every_promos,
+                 bench_every_games=args.bench_every_games, resume=args.resume,
                  random_open_frac=args.random_open_frac, openings_path=args.openings)
