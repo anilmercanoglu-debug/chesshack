@@ -9,7 +9,7 @@ NetConfig and the loader asserts it, so a Phase-2 warm start can never silently 
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Optional, Tuple
 
 import torch
@@ -103,6 +103,23 @@ def masked_policy(policy_logits: torch.Tensor, legal_mask: torch.Tensor) -> torc
 
 def count_params(net: nn.Module) -> int:
     return sum(p.numel() for p in net.parameters())
+
+
+def grow_net(net: ChessNet, add_blocks: int) -> ChessNet:
+    """Function-preserving DEPTH growth (Net2DeeperNet). Return a new ChessNet with `add_blocks`
+    more ResBlocks (same channels), copying every existing weight; the appended blocks are exact
+    IDENTITIES — their conv2 weight is zeroed, so h = SE(conv2(...)) = 0 and output = input + 0.
+    The grown net computes the SAME function as `net` until training fills the new capacity."""
+    new_cfg = replace(net.cfg, blocks=net.cfg.blocks + add_blocks)
+    grown = ChessNet(new_cfg)
+    old_sd, new_sd = net.state_dict(), grown.state_dict()
+    for k in new_sd:                       # copy stem, heads, and the existing blocks verbatim
+        if k in old_sd and old_sd[k].shape == new_sd[k].shape:
+            new_sd[k] = old_sd[k].detach().to(new_sd[k].device).clone()
+    for i in range(net.cfg.blocks, new_cfg.blocks):   # new blocks -> identity (conv2 == 0)
+        new_sd[f"body.{i}.conv2.weight"].zero_()
+    grown.load_state_dict(new_sd)
+    return grown
 
 
 # ---------------------------------------------------------------------------

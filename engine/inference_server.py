@@ -81,10 +81,16 @@ class InferenceServer:
                 off += b
 
     def update_net(self, state_dict) -> None:
-        """Hot-swap the generator weights (called on promotion)."""
+        """Hot-swap the generator weights (called on promotion, same architecture)."""
         with self._lock:
             self.net.load_state_dict(state_dict)
             self.net.eval()
+
+    def replace_net(self, new_net) -> None:
+        """Swap in a whole new net object (used when the architecture changes, e.g. self-grow).
+        Workers are net-agnostic (planes in, policy/value out) so nothing else needs to know."""
+        with self._lock:
+            self.net = new_net.eval()
 
     @property
     def avg_batch(self) -> float:

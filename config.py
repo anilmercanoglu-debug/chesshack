@@ -42,6 +42,7 @@ class NetConfig:
 DEV_NET = NetConfig(channels=192, blocks=15)     # ~10.7M — local CPU dev
 PROD_NET = NetConfig(channels=256, blocks=20)    # ~24.5M — 80GB production
 SCALE_NET = NetConfig(channels=384, blocks=28)   # ~76M — large scale-up (capacity test)
+START_NET = NetConfig(channels=256, blocks=4)    # ~5.4M — self-grow start (deepens toward PROD)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +105,11 @@ class SelfPlayConfig:
     state_every_games: int = 2000     # checkpoint full training state (for --resume) every N games
     base_elo: float = 1611.0          # starting Elo estimate (the distilled net's measured Elo)
     worker_leaf_batch: int = 32       # leaves per worker MCTS wave (fewer IPC round-trips -> faster)
+    # self-grow (depth-only, function-preserving): when the net plateaus, add ResBlocks
+    grow_block_step: int = 4          # blocks added per growth
+    grow_max_blocks: int = 28         # stop growing at this depth (C256/B28 ~33M)
+    grow_after_holds: int = 3         # consecutive gate-holds that trigger a growth
+    grow_cooldown_games: int = 3000   # min games between growths (let new capacity train)
 
 
 # ---------------------------------------------------------------------------
