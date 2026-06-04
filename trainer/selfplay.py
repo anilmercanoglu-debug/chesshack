@@ -47,6 +47,7 @@ def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_valu
     import chess as _chess
     from engine.mcts import mcts_search, policy_target, pick_move, root_value
     from engine.inference_server import ServerEvaluator
+    from engine.mate_search import find_forced_mate
 
     ev = ServerEvaluator(worker_id, request_q, result_q)
     rng = _np.random.default_rng(seed)
@@ -54,6 +55,7 @@ def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_valu
     zw = params["zw"]; qw = params["qw"]
     cpuct = params["c_puct"]; da = params["dir_alpha"]; de = params["dir_eps"]
     openings = params.get("openings"); rof = float(params.get("random_open_frac", 0.0))
+    mate_depth = int(params.get("mate_depth", 0)); mate_nodes = int(params.get("mate_nodes", 50000))
 
     while not stop_evt.is_set():
         sims = int(sims_value.value)
@@ -67,6 +69,10 @@ def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_valu
         while not board.is_game_over(claim_draw=True) and plies < MAX_PLIES:
             if stop_evt.is_set():
                 return
+            if mate_depth:                       # play a forced mate if one exists (no sample recorded;
+                mm, _ = find_forced_mate(board, mate_depth, mate_nodes)   # the correct OUTCOME still
+                if mm is not None:                # propagates z to the earlier MCTS-recorded positions)
+                    board.push(mm); plies += 1; continue
             root = mcts_search(board, ev, sims, c_puct=cpuct, leaf_batch=lb,
                                add_noise=True, dirichlet_alpha=da, dirichlet_eps=de, rng=rng)
             if root.terminal:
@@ -158,7 +164,8 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                  leaf_batch: int = SELFPLAY.worker_leaf_batch,
                  base_elo: float = SELFPLAY.base_elo, resume: bool = False,
                  bench_every_promos: int = 0, bench_every_games: int = 0, grow: bool = False,
-                 random_open_frac: float = 0.0, openings_path: str = None):
+                 random_open_frac: float = 0.0, openings_path: str = None,
+                 mate_depth: int = 0, mate_nodes: int = 50000):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     state_path = out_dir / "selfplay_state.pt"
@@ -209,7 +216,8 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
                   zw=SELFPLAY.value_z_weight, qw=SELFPLAY.value_q_weight,
                   c_puct=MCTS_CFG.c_puct, dir_alpha=MCTS_CFG.dirichlet_alpha,
                   dir_eps=MCTS_CFG.dirichlet_eps,
-                  random_open_frac=random_open_frac, openings=openings)
+                  random_open_frac=random_open_frac, openings=openings,
+                  mate_depth=mate_depth, mate_nodes=mate_nodes)
     procs = [ctx.Process(target=_selfplay_worker,
                          args=(i, server.request_q, server.result_qs[i], game_q, stop,
                                sims_value, 1234 + i, params), daemon=True)
@@ -276,7 +284,8 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
             if games - last_gate >= gate_every_games:
                 last_gate = games
                 d = gate(train_net, champion, device=device, games=gate_games,
-                         winrate=gate_winrate, sims=sims_value.value, openings=openings)
+                         winrate=gate_winrate, sims=sims_value.value, openings=openings,
+                         mate_depth=mate_depth)
                 if d["promote"]:
                     before = elo_est
                     elo_est += _elo_gain(d["candidate_score"])
@@ -381,6 +390,9 @@ if __name__ == "__main__":
                     help="run a real SF-anchored Elo checkup every N generated games")
     ap.add_argument("--grow", action="store_true",
                     help="self-grow: add identity ResBlocks when the net plateaus (gate holds)")
+    ap.add_argument("--mate-depth", type=int, default=0,
+                    help="forced-mate search in self-play+gate (0=off; keep small, e.g. 5-8, for speed)")
+    ap.add_argument("--mate-nodes", type=int, default=50000)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--capacity", type=int, default=SELFPLAY.replay_capacity)
     ap.add_argument("--openings", type=str, default=None,
@@ -399,4 +411,5 @@ if __name__ == "__main__":
                  leaf_batch=args.leaf_batch, base_elo=args.base_elo,
                  bench_every_promos=args.bench_every_promos,
                  bench_every_games=args.bench_every_games, grow=args.grow, resume=args.resume,
-                 random_open_frac=args.random_open_frac, openings_path=args.openings)
+                 random_open_frac=args.random_open_frac, openings_path=args.openings,
+                 mate_depth=args.mate_depth, mate_nodes=args.mate_nodes)
