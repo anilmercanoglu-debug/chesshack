@@ -108,7 +108,7 @@ class SelfPlayConfig:
     # self-grow (depth-only, function-preserving): when the net plateaus, add ResBlocks
     grow_block_step: int = 4          # blocks added per growth
     grow_max_blocks: int = 28         # stop growing at this depth (C256/B28 ~33M)
-    grow_after_holds: int = 3         # consecutive gate-holds that trigger a growth
+    grow_after_holds: int = 5         # consecutive gate-holds that trigger a growth
     grow_cooldown_games: int = 3000   # min games between growths (let new capacity train)
 
 
