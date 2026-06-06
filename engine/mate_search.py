@@ -87,3 +87,74 @@ def find_forced_mate(board: chess.Board, max_depth: int = 25, node_budget: int =
                      ) -> Tuple[Optional[chess.Move], Optional[int]]:
     """Convenience wrapper. Returns (mating_move, mate_in_N) or (None, None)."""
     return MateSearcher(max_depth, node_budget).find_mate(board)
+
+
+class FullWidthMateSearcher:
+    """Shallow ALL-MOVES forced-mate finder. Unlike the continuous-check searcher, the attacker
+    may play ANY move (including quiet ones), so this catches mates that need a non-checking move
+    -- ladder mates, zugzwang mates, quiet key-moves. Complete for the depths it reaches, but the
+    branching is full (~30 moves/node) so it's exponential: keep max_depth small (2-3, maybe 4).
+    Node-budget capped; returns (None, None) if no mate proven within budget/depth."""
+
+    def __init__(self, max_depth: int = 3, node_budget: int = 200_000):
+        self.max_depth = max_depth          # in attacker moves (mate-in-N)
+        self.node_budget = node_budget
+        self.nodes = 0
+
+    def find_mate(self, board: chess.Board) -> Tuple[Optional[chess.Move], Optional[int]]:
+        """Iterative-deepening on mate distance. Returns (move, mate_in_N) or (None, None)."""
+        for d in range(1, self.max_depth + 1):
+            self.nodes = 0
+            mv = self._attacker(board, d)
+            if mv is not None:
+                return mv, d
+            if self.nodes >= self.node_budget:
+                break
+        return None, None
+
+    def _attacker(self, board: chess.Board, d: int) -> Optional[chess.Move]:
+        """Attacker to move: a move that forces mate in <= d attacker moves, or None."""
+        for m in board.legal_moves:
+            self.nodes += 1
+            if self.nodes >= self.node_budget:
+                return None
+            board.push(m)
+            if board.is_checkmate():
+                board.pop()
+                return m
+            ok = d > 1 and self._defender(board, d - 1)
+            board.pop()
+            if ok:
+                return m
+        return None
+
+    def _defender(self, board: chess.Board, d: int) -> bool:
+        """Defender to move: do ALL replies allow the attacker to mate in <= d?"""
+        if self.nodes >= self.node_budget:
+            return False
+        replies = list(board.legal_moves)
+        if not replies:                  # stalemate (checkmate handled by caller) -> escapes
+            return False
+        for r in replies:
+            board.push(r)
+            mv = self._attacker(board, d)
+            board.pop()
+            if mv is None:               # one escape -> not a forced mate
+                return False
+        return True
+
+
+def find_any_forced_mate(board: chess.Board, shallow_depth: int = 3, deep_depth: int = 25,
+                         shallow_budget: int = 200_000, deep_budget: int = 300_000
+                         ) -> Tuple[Optional[chess.Move], Optional[int], Optional[str]]:
+    """Combined finder. Tries the SHALLOW full-width searcher first (catches short mates of ANY
+    kind, incl. quiet-move ladder/zugzwang mates), then the DEEP continuous-check searcher
+    (catches long check-only mates cheaply). Returns (move, mate_in_N, kind) where kind is
+    'fullwidth' or 'check', or (None, None, None)."""
+    mv, d = FullWidthMateSearcher(shallow_depth, shallow_budget).find_mate(board)
+    if mv is not None:
+        return mv, d, "fullwidth"
+    mv, d = MateSearcher(deep_depth, deep_budget).find_mate(board)
+    if mv is not None:
+        return mv, d, "check"
+    return None, None, None

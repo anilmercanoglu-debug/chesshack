@@ -23,7 +23,8 @@ from engine.mcts import root_value
 BOT = None
 BOT_LOCK = threading.Lock()
 DEFAULT_SIMS = 400
-MATE_DEPTH = 0          # >0: forced-mate search before MCTS (NN-independent; set via --mate-depth)
+MATE_DEPTH = 0          # >0: deep continuous-check mate search before MCTS (set via --mate-depth)
+MATE_SHALLOW = 0        # >0: shallow full-width mate search -> quiet/ladder mates (set via --mate-shallow)
 
 INDEX_HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>ChessHack — play the bot</title>
@@ -247,9 +248,9 @@ def _state(board: chess.Board) -> dict:
 
 
 def _bot_move(board: chess.Board, sims: int) -> dict:
-    if MATE_DEPTH:                              # forced-mate search first (NN-independent)
-        from engine.mate_search import find_forced_mate
-        mm, md = find_forced_mate(board, MATE_DEPTH)
+    if MATE_DEPTH or MATE_SHALLOW:             # forced-mate search first (NN-independent)
+        from engine.mate_search import find_any_forced_mate
+        mm, md, _ = find_any_forced_mate(board, shallow_depth=MATE_SHALLOW, deep_depth=MATE_DEPTH)
         if mm is not None:
             info = {"from": chess.square_name(mm.from_square),
                     "to": chess.square_name(mm.to_square), "san": board.san(mm),
@@ -313,17 +314,20 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global BOT, DEFAULT_SIMS, MATE_DEPTH
+    global BOT, DEFAULT_SIMS, MATE_DEPTH, MATE_SHALLOW
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default="data/nets/distilled.pt")
     ap.add_argument("--sims", type=int, default=400)
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--leaf-batch", type=int, default=16)
     ap.add_argument("--mate-depth", type=int, default=0,
-                    help="forced-mate search depth before MCTS (0=off, e.g. 10 = find mate-in<=10)")
+                    help="deep continuous-check mate search before MCTS (0=off, e.g. 10 = mate-in<=10)")
+    ap.add_argument("--mate-shallow", type=int, default=0,
+                    help="shallow full-width mate search (all moves) -> quiet/ladder mates, e.g. 3")
     args = ap.parse_args()
     DEFAULT_SIMS = args.sims
     MATE_DEPTH = args.mate_depth
+    MATE_SHALLOW = args.mate_shallow
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     net, _ = load_checkpoint(args.ckpt, map_location=dev)
     net = net.to(dev)

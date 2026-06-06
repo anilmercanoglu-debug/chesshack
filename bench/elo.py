@@ -46,9 +46,10 @@ def fit_elo(results: List[Tuple[float, int, float]]) -> Tuple[float, float]:
 
 def measure_elo(net, device: str = "cpu", rungs=BENCH.elo_ladder, games_per_rung: int = 20,
                 sims: int = BENCH.sims, leaf_batch: int = 16, sf_movetime: float = 0.05,
-                verbose: bool = True, openings=None, mate_depth: int = 0, mate_nodes: int = 200_000) -> dict:
+                verbose: bool = True, openings=None, mate_depth: int = 0, mate_nodes: int = 200_000,
+                mate_shallow: int = 0) -> dict:
     us = MCTSPlayer(net, sims=sims, device=device, leaf_batch=leaf_batch, temperature=0.0,
-                    mate_depth=mate_depth, mate_nodes=mate_nodes)
+                    mate_depth=mate_depth, mate_nodes=mate_nodes, shallow_depth=mate_shallow)
     results: List[Tuple[float, int, float]] = []
     detail = []
     for rung in rungs:
@@ -90,6 +91,8 @@ if __name__ == "__main__":
     ap.add_argument("--mate-depth", type=int, default=0,
                     help="forced-mate search before MCTS (0=off; NN-independent, works with any ckpt)")
     ap.add_argument("--mate-nodes", type=int, default=200_000)
+    ap.add_argument("--mate-shallow", type=int, default=0,
+                    help="shallow full-width mate search (all moves) -> quiet/ladder mates, e.g. 3")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     net, _ = load_checkpoint(args.ckpt, map_location=dev)
@@ -101,7 +104,7 @@ if __name__ == "__main__":
     t = time.time()
     res = measure_elo(net, device=dev, rungs=rungs, games_per_rung=args.games,
                       sims=args.sims, sf_movetime=args.sf_movetime, openings=openings,
-                      mate_depth=args.mate_depth, mate_nodes=args.mate_nodes)
+                      mate_depth=args.mate_depth, mate_nodes=args.mate_nodes, mate_shallow=args.mate_shallow)
     print(f"\nEstimated Elo: {res['elo']:.0f} ± {res['ci']:.0f}  "
           f"(sims={args.sims}, {time.time()-t:.0f}s)")
     append_history({"step": args.step, "elo": res["elo"], "ci": res["ci"],
