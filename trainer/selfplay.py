@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import multiprocessing as mp
 import queue
 import time
@@ -202,16 +203,30 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
     # --- resume from a saved training state (survives Colab restarts) ---
     # Rebuild the nets at the SAVED config so a self-grown (deeper) net resumes correctly.
     if resume and state_path.exists():
-        st = torch.load(state_path, map_location=device, weights_only=False)
-        net_cfg = NetConfig(**st["net_config"])
-        champion = ChessNet(net_cfg).to(device).eval(); champion.load_state_dict(st["champion"])
-        train_net = ChessNet(net_cfg).to(device); train_net.load_state_dict(st["train_net"])
-        opt = torch.optim.AdamW(train_net.parameters(), lr=lr, weight_decay=1e-4)
-        opt.load_state_dict(st["optimizer"])
-        steps, games, promotions = st["step"], st["games"], st["promotions"]
-        elo_est, cur_sims = st["elo_est"], st["sims"]
-        print(f"[selfplay] RESUMED: step={steps} games={games} promotions={promotions} "
-              f"est.Elo~{elo_est:.0f} sims={cur_sims} blocks={net_cfg.blocks}")
+        try:
+            st = torch.load(state_path, map_location=device, weights_only=False)
+            net_cfg = NetConfig(**st["net_config"])
+            champion = ChessNet(net_cfg).to(device).eval(); champion.load_state_dict(st["champion"])
+            train_net = ChessNet(net_cfg).to(device); train_net.load_state_dict(st["train_net"])
+            opt = torch.optim.AdamW(train_net.parameters(), lr=lr, weight_decay=1e-4)
+            opt.load_state_dict(st["optimizer"])
+            steps, games, promotions = st["step"], st["games"], st["promotions"]
+            elo_est, cur_sims = st["elo_est"], st["sims"]
+            print(f"[selfplay] RESUMED: step={steps} games={games} promotions={promotions} "
+                  f"est.Elo~{elo_est:.0f} sims={cur_sims} blocks={net_cfg.blocks}")
+        except Exception as e:  # corrupt/truncated state (e.g. killed mid-save) -> recover from champion.pt
+            cp = out_dir / "champion.pt"
+            print(f"[selfplay] WARN: resume state unreadable ({e}); recovering from {cp}")
+            ck = torch.load(cp, map_location=device, weights_only=False)
+            net_cfg = NetConfig(**ck["net_config"])
+            champion = ChessNet(net_cfg).to(device).eval(); champion.load_state_dict(ck["state_dict"])
+            train_net = ChessNet(net_cfg).to(device); train_net.load_state_dict(ck["state_dict"])
+            opt = torch.optim.AdamW(train_net.parameters(), lr=lr, weight_decay=1e-4)
+            steps = int(ck.get("step", 0)); games = int(ck.get("games", 0))
+            promotions = int(ck.get("promotions", 0)); elo_est = float(ck.get("elo_est", base_elo))
+            cur_sims = int(sims)
+            print(f"[selfplay] RECOVERED from champion.pt: games={games} est.Elo~{elo_est:.0f} "
+                  f"blocks={net_cfg.blocks} (fresh optimizer + empty buffer)")
 
     ctx = mp.get_context("spawn")
     server = InferenceServer(champion, device, n_workers, ctx,
@@ -246,12 +261,14 @@ def run_selfplay(init_ckpt: str, net_cfg, n_workers: int, total_steps: int,
     games0 = games          # games at session start -> g/s reflects THIS session, not the resumed total
 
     def save_state():
-        torch.save({
+        tmp = str(state_path) + ".tmp"          # atomic: write to temp then rename, so a kill
+        torch.save({                            # mid-save can't truncate/corrupt the real state file
             "net_config": asdict(net_cfg), "champion": champion.state_dict(),
             "train_net": train_net.state_dict(), "optimizer": opt.state_dict(),
             "step": steps, "games": games, "promotions": promotions,
             "elo_est": elo_est, "sims": sims_value.value,
-        }, state_path)
+        }, tmp)
+        os.replace(tmp, state_path)
 
     try:
         while steps < total_steps:
