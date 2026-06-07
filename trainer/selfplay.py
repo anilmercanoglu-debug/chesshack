@@ -45,7 +45,7 @@ MAX_PLIES = 320
 def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_value, seed, params):
     import numpy as _np
     import chess as _chess
-    from engine.mcts import mcts_search, policy_target, pick_move, root_value
+    from engine.mcts import mcts_search, policy_target, pick_move, root_value, move_to_index
     from engine.inference_server import ServerEvaluator
     from engine.mate_search import find_any_forced_mate
 
@@ -70,11 +70,16 @@ def _selfplay_worker(worker_id, request_q, result_q, game_q, stop_evt, sims_valu
         while not board.is_game_over(claim_draw=True) and plies < MAX_PLIES:
             if stop_evt.is_set():
                 return
-            if mate_depth or mate_shallow:       # play a forced mate if one exists (no sample recorded;
-                mm, _, _ = find_any_forced_mate(board, shallow_depth=mate_shallow,   # the correct OUTCOME
-                                                deep_depth=mate_depth,               # still propagates z to
+            if mate_depth or mate_shallow:       # forced mate -> play it AND record it (distill the sound,
+                mm, _, _ = find_any_forced_mate(board, shallow_depth=mate_shallow,   # NN-independent mate
+                                                deep_depth=mate_depth,               # finder into the net:
                                                 shallow_budget=mate_nodes, deep_budget=mate_nodes)
-                if mm is not None:                # the earlier MCTS-recorded positions)
+                if mm is not None:               # one-hot policy on the mating move + win value (q=1).
+                    legal = list(board.legal_moves)                                  # teaches the net the
+                    midx = _np.fromiter((move_to_index(m, board) for m in legal),    # tactical/sac mates its
+                                        dtype=_np.int64, count=len(legal))           # own value head won't
+                    pi = _np.zeros(len(legal), dtype=_np.float32); pi[legal.index(mm)] = 1.0  # find (e.g.
+                    samples.append((board.fen(), midx, pi, 1.0, board.turn))         # smothered/queen-sac).
                     board.push(mm); plies += 1; continue
             root = mcts_search(board, ev, sims, c_puct=cpuct, leaf_batch=lb,
                                add_noise=True, dirichlet_alpha=da, dirichlet_eps=de, rng=rng)
